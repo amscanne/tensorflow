@@ -1,0 +1,67 @@
+# This workflow builds and publishes each tag, as required.
+name: Publish tag
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+jobs:
+  build-tag:
+    name: Build and publish tag
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        os: [ubuntu-latest] # [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360  # Limit build to six hours.
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab
+        with:
+          submodules: true
+      - name: Configure Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt install -y python3-dev python3-pip
+          pip3 install -U --user pip numpy wheel packaging requests opt_einsum
+          pip3 install -U --user keras_preprocessing --no-deps
+          ./configure
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: git patch unzip
+          update: false
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        run: |
+          pip3 install -U six numpy wheel packaging
+          pip3 install -U keras_preprocessing --no-deps
+          python ./configure.py
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        run: |
+          pip3 install -U --user pip numpy wheel packaging requests opt_einsum
+          pip3 install -U --user keras_preprocessing --no-deps
+          ./configure
+      - name: Build targets
+        shell: bash
+        run: |
+          bazel build \
+              //tensorflow/compiler/mlir:tf-opt \
+              //tensorflow/compiler/mlir:tf-mlir-translate \
+              //tensorflow:tensorflow \
+              //tensorflow:install_headers
+          tar -cvzf ${{ runner.os }}.tgz $(bazel cquery \
+              --output=starlark \
+              --starlark:expr="'\n'.join([file.path for file in target.files.to_list()])" \
+              //tensorflow/compiler/mlir:tf-opt \
+              //tensorflow/compiler/mlir:tf-mlir-translate \
+              //tensorflow:tensorflow \
+              //tensorflow:install_headers \
+           )
+      - name: Publish assets
+        run: |
+          # Publish appropriate assets to the GitHub release, using the named tarball.
+          gh release upload $(git rev-parse --abbrev-ref HEAD) ${{ runner.os }}.tgz
