@@ -1,0 +1,48 @@
+# This file automatically keeps the current repository in sync with
+# the upstream repository. It finds all new tags and automatically
+# mirrors those tags (provided they match the regex specificed below).
+#
+# The process for building and releasing tags is managed separately.
+name: Mirror upstream tags
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+jobs:
+  mirror-tags:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@755da8c3cf115ac066823e79a1e1788f8940201b # v3.2.0
+      - name: Mirror all tags
+        shell: bash
+        run: |
+          set -xeuo pipefail
+          git remote add upstream https://github.com/tensorflow/tensorflow
+          git config --global user.email "none@example.com"
+          git config --global user.name "Mirror Workflow"
+          git checkout master
+          git fetch upstream
+          git rebase --onto=upstream/master
+          git push origin --force HEAD:master
+          git fetch upstream --tags
+          # This filters out any tags not matching the regular expression, and any
+          # tags that are already defined in the origin. The grep is constructed in
+          # this way to avoid an ls-remote in the full tag loop.
+          for tag in $(git tag | grep -E '^v[2-9][0-9]*\.' | grep -v -E "^$(git ls-remote --exit-code --tags origin | cut -d'/' -f3 | tr '\\n' '|')$"); do
+              # Start a new branch called tmp_XXX, starting at the tag.
+              git checkout -b "tmp_${tag}" "${tag}"
+              # Rebase all extra commits onto that branch.
+              git cherry-pick upstream/master...master
+              # Move the tag to include all commits that the single comment
+              # that adds these workflows.
+              git tag -d "${tag}"
+              git tag "${tag}" "tmp_${tag}"
+              # Delete the branch and clean up.
+              git checkout master
+              git branch -D "tmp_${tag}"
+              # Push the new tag.
+              git push origin "${tag}"
+          done
